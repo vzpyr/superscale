@@ -53,7 +53,7 @@ Future<void> showModelSheet(BuildContext context, LibraryStore store) {
 
 String _subtitle(LibraryStore store, UpscaleModel model) {
   if (store.downloadedModels.contains(model.id)) {
-    return '${model.sizeLabel} (Downloaded)';
+    return '${model.sizeLabel} (downloaded)';
   }
   return model.sizeLabel;
 }

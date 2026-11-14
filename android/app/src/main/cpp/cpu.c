@@ -1,9 +1,12 @@
 #include <onnxruntime_c_api.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <string.h>
 
-typedef struct {
+#include "cpu.h"
+#include "err.h"
+#include "image.h"
+
+struct sc_cpu_session {
   const OrtApi* api;
   OrtSession* session;
   OrtMemoryInfo* meminfo;
@@ -13,35 +16,22 @@ typedef struct {
   float* input_buf;
   size_t input_cap;
   int scale;
-} superscale_session;
+};
 
 static const OrtApi* g_api = NULL;
 static OrtEnv* g_env = NULL;
 
-static char* copy_string(const char* s) {
-  if (!s) s = "unknown error";
-  size_t n = strlen(s);
-  char* out = (char*)malloc(n + 1);
-  if (out) memcpy(out, s, n + 1);
-  return out;
-}
-
 static int fail(const OrtApi* api, OrtStatus* status, char** err) {
-  if (err) {
-    *err = copy_string(status ? api->GetErrorMessage(status) : "unknown error");
-  }
+  int rc = sc_err(err, "%s", status ? api->GetErrorMessage(status) : "unknown error");
   if (status) api->ReleaseStatus(status);
-  return 1;
+  return rc;
 }
 
 static int fail_text(const char* msg, char** err) {
-  if (err) *err = copy_string(msg);
-  return 1;
+  return sc_err(err, "%s", msg);
 }
 
-const char* superscale_runtime_version(void) { return OrtGetApiBase()->GetVersionString(); }
-
-int superscale_init(char** err) {
+static int sc_cpu_init(char** err) {
   if (g_env) return 0;
   const OrtApiBase* base = OrtGetApiBase();
   g_api = base->GetApi(ORT_API_VERSION);
@@ -51,8 +41,21 @@ int superscale_init(char** err) {
   return 0;
 }
 
-superscale_session* superscale_open(const char* model_path, int threads, char** err) {
-  if (!g_env && superscale_init(err) != 0) return NULL;
+static int sc_cpu_probe(sc_cpu_session* s, char** err) {
+  enum { kProbe = 8, kMaxScale = 16 };
+  uint8_t input[kProbe * kProbe * 4] = {0};
+  uint8_t output[kProbe * kProbe * 4 * kMaxScale * kMaxScale];
+  int w = 0;
+  int h = 0;
+  if (sc_cpu_execute(s, input, kProbe, kProbe, output, sizeof(output), &w, &h, err)) return 1;
+  if (w != h || w % kProbe != 0) return fail_text("unsupported model output shape", err);
+  s->scale = w / kProbe;
+  if (s->scale < 1 || s->scale > kMaxScale) return fail_text("unsupported model scale", err);
+  return 0;
+}
+
+sc_cpu_session* sc_cpu_create(const char* model_path, int threads, char** err) {
+  if (!g_env && sc_cpu_init(err) != 0) return NULL;
   const OrtApi* api = g_api;
 
   OrtSessionOptions* options = NULL;
@@ -62,9 +65,9 @@ superscale_session* superscale_open(const char* model_path, int threads, char** 
     return NULL;
   }
 
-  if (threads > 0) status = api->SetIntraOpNumThreads(options, threads);
-  if (!status) status = api->SetSessionExecutionMode(options, ORT_SEQUENTIAL);
+  status = api->SetIntraOpNumThreads(options, threads > 0 ? threads : 1);
   if (!status) status = api->SetSessionGraphOptimizationLevel(options, ORT_ENABLE_ALL);
+  if (!status) status = api->DisableMemPattern(options);
   if (status) {
     api->ReleaseSessionOptions(options);
     fail(api, status, err);
@@ -98,7 +101,7 @@ superscale_session* superscale_open(const char* model_path, int threads, char** 
     return NULL;
   }
 
-  superscale_session* s = (superscale_session*)calloc(1, sizeof(superscale_session));
+  sc_cpu_session* s = (sc_cpu_session*)calloc(1, sizeof(sc_cpu_session));
   if (!s) {
     allocator->Free(allocator, input_name);
     allocator->Free(allocator, output_name);
@@ -111,11 +114,11 @@ superscale_session* superscale_open(const char* model_path, int threads, char** 
   s->allocator = allocator;
   s->input_name = input_name;
   s->output_name = output_name;
-  s->scale = 4;
+  s->scale = 0;
 
   status = api->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &s->meminfo);
   if (status) {
-    superscale_session* tmp = s;
+    sc_cpu_session* tmp = s;
     if (tmp->input_name) allocator->Free(allocator, tmp->input_name);
     if (tmp->output_name) allocator->Free(allocator, tmp->output_name);
     api->ReleaseSession(session);
@@ -124,11 +127,15 @@ superscale_session* superscale_open(const char* model_path, int threads, char** 
     return NULL;
   }
 
+  if (sc_cpu_probe(s, err)) {
+    sc_cpu_destroy(s);
+    return NULL;
+  }
   return s;
 }
 
-int superscale_run(superscale_session* s, const uint8_t* rgba, int w, int h, uint8_t* out, size_t out_len,
-               int* out_w, int* out_h, char** err) {
+int sc_cpu_execute(sc_cpu_session* s, const uint8_t* rgba, int w, int h, uint8_t* out, size_t out_len, int* out_w,
+                   int* out_h, char** err) {
   if (!s || !rgba || !out || w <= 0 || h <= 0) return fail_text("invalid arguments", err);
   const OrtApi* api = s->api;
 
@@ -142,17 +149,12 @@ int superscale_run(superscale_session* s, const uint8_t* rgba, int w, int h, uin
   }
 
   float* src = s->input_buf;
-  for (size_t i = 0; i < plane; ++i) {
-    const uint8_t* p = rgba + i * 4;
-    src[i] = (float)p[0] / 255.0f;
-    src[plane + i] = (float)p[1] / 255.0f;
-    src[plane * 2 + i] = (float)p[2] / 255.0f;
-  }
+  sc_rgba_to_planar(rgba, plane, src);
 
   int64_t shape[4] = {1, 3, h, w};
   OrtValue* input = NULL;
-  OrtStatus* status = api->CreateTensorWithDataAsOrtValue(
-      s->meminfo, src, need * sizeof(float), shape, 4, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input);
+  OrtStatus* status = api->CreateTensorWithDataAsOrtValue(s->meminfo, src, need * sizeof(float), shape, 4,
+                                                          ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &input);
   if (status) return fail(api, status, err);
 
   const char* input_names[1] = {s->input_name};
@@ -192,9 +194,17 @@ int superscale_run(superscale_session* s, const uint8_t* rgba, int w, int h, uin
   int64_t oh = dims[2];
   int64_t ow = dims[3];
   size_t pixels = (size_t)ow * (size_t)oh;
+  if (dims[0] != 1 || dims[1] != 3) {
+    api->ReleaseValue(output);
+    return fail_text("unexpected output shape", err);
+  }
   if (pixels == 0 || pixels * 4 > out_len) {
     api->ReleaseValue(output);
     return fail_text("output buffer too small", err);
+  }
+  if (ow % w != 0 || oh % h != 0) {
+    api->ReleaseValue(output);
+    return fail_text("unsupported output scale", err);
   }
 
   float* dst = NULL;
@@ -204,15 +214,7 @@ int superscale_run(superscale_session* s, const uint8_t* rgba, int w, int h, uin
     return fail(api, status, err);
   }
 
-  for (size_t i = 0; i < pixels; ++i) {
-    float r = dst[i] * 255.0f;
-    float g = dst[pixels + i] * 255.0f;
-    float b = dst[pixels * 2 + i] * 255.0f;
-    out[i * 4] = (uint8_t)(r < 0 ? 0 : (r > 255 ? 255 : r + 0.5f));
-    out[i * 4 + 1] = (uint8_t)(g < 0 ? 0 : (g > 255 ? 255 : g + 0.5f));
-    out[i * 4 + 2] = (uint8_t)(b < 0 ? 0 : (b > 255 ? 255 : b + 0.5f));
-    out[i * 4 + 3] = 255;
-  }
+  sc_planar_to_rgba(dst, pixels, out);
 
   api->ReleaseValue(output);
 
@@ -222,9 +224,11 @@ int superscale_run(superscale_session* s, const uint8_t* rgba, int w, int h, uin
   return 0;
 }
 
-int superscale_scale(superscale_session* s) { return s ? s->scale : 0; }
+int sc_cpu_scale(const sc_cpu_session* s) {
+  return s ? s->scale : 0;
+}
 
-void superscale_close(superscale_session* s) {
+void sc_cpu_destroy(sc_cpu_session* s) {
   if (!s) return;
   const OrtApi* api = s->api;
   if (s->input_name) s->allocator->Free(s->allocator, s->input_name);
@@ -235,4 +239,35 @@ void superscale_close(superscale_session* s) {
   free(s);
 }
 
-void superscale_free_string(char* s) { free(s); }
+static int cpu_open(const char* model_path, int threads, void** handle, int* scale, int* max_span, char** err) {
+  sc_cpu_session* session = sc_cpu_create(model_path, threads, err);
+  if (!session) {
+    return 1;
+  }
+  *handle = session;
+  if (scale) {
+    *scale = sc_cpu_scale(session);
+  }
+  if (max_span) {
+    *max_span = 0;
+  }
+  return 0;
+}
+
+static int cpu_run(void* handle, const uint8_t* rgba, int width, int height, uint8_t* out, size_t out_len, int* out_w,
+                   int* out_h, char** err) {
+  return sc_cpu_execute((sc_cpu_session*)handle, rgba, width, height, out, out_len, out_w, out_h, err);
+}
+
+static void cpu_close(void* handle) {
+  sc_cpu_destroy((sc_cpu_session*)handle);
+}
+
+const sc_backend_ops* sc_cpu_ops(void) {
+  static const sc_backend_ops ops = {
+      .open = cpu_open,
+      .run = cpu_run,
+      .close = cpu_close,
+  };
+  return &ops;
+}

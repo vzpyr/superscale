@@ -14,10 +14,9 @@ class UpscaleModel {
 
 String formatBytes(int bytes) {
   if (bytes < 1024) return '$bytes B';
-  if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(0)} kB';
+  if (bytes < 1024 * 1024) return '${(bytes / 1024).round()} kB';
   if (bytes < 1024 * 1024 * 1024) {
-    final mb = bytes / (1024 * 1024);
-    return mb >= 10 ? '${mb.round()} MB' : '${mb.toStringAsFixed(1)} MB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
   }
   return '${(bytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB';
 }

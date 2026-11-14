@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../engine/native.dart';
 import '../state/library.dart';
 import '../tokens.dart';
 import 'library_bar.dart';
@@ -105,6 +106,17 @@ class _Controls extends StatelessWidget {
             icon: const Icon(Icons.auto_awesome),
             label: Text(store.model.id),
           ),
+        ),
+        const SizedBox(height: Spacing.md),
+        SegmentedButton<Backend>(
+          segments: const [
+            ButtonSegment(value: Backend.cpu, label: const Text('CPU')),
+            ButtonSegment(value: Backend.gpu, label: const Text('GPU')),
+          ],
+          selected: {store.backend},
+          onSelectionChanged: store.busy
+              ? null
+              : (selection) => store.chooseBackend(selection.first),
         ),
         if (store.busy) ...[
           const SizedBox(height: Spacing.md),

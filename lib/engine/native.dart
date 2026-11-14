@@ -3,20 +3,36 @@ import 'dart:io';
 
 import 'package:ffi/ffi.dart';
 
-typedef _InitNative = Int32 Function(Pointer<Pointer<Uint8>> err);
-typedef _Init = int Function(Pointer<Pointer<Uint8>> err);
+enum Backend { cpu, gpu }
+
+class EngineFailure implements Exception {
+  const EngineFailure(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
 typedef _OpenNative = Pointer<Void> Function(
   Pointer<Utf8> path,
+  Int32 backend,
   Int32 threads,
+  Pointer<Int32> scale,
+  Pointer<Int32> maxSpan,
   Pointer<Pointer<Uint8>> err,
 );
 typedef _Open = Pointer<Void> Function(
   Pointer<Utf8> path,
+  int backend,
   int threads,
+  Pointer<Int32> scale,
+  Pointer<Int32> maxSpan,
   Pointer<Pointer<Uint8>> err,
 );
+
 typedef _RunNative = Int32 Function(
-  Pointer<Void> session,
+  Pointer<Void> engine,
   Pointer<Uint8> rgba,
   Int32 width,
   Int32 height,
@@ -27,7 +43,7 @@ typedef _RunNative = Int32 Function(
   Pointer<Pointer<Uint8>> err,
 );
 typedef _Run = int Function(
-  Pointer<Void> session,
+  Pointer<Void> engine,
   Pointer<Uint8> rgba,
   int width,
   int height,
@@ -37,80 +53,74 @@ typedef _Run = int Function(
   Pointer<Int32> outHeight,
   Pointer<Pointer<Uint8>> err,
 );
-typedef _ScaleNative = Int32 Function(Pointer<Void> session);
-typedef _Scale = int Function(Pointer<Void> session);
-typedef _CloseNative = Void Function(Pointer<Void> session);
-typedef _Close = void Function(Pointer<Void> session);
+
+typedef _CloseNative = Void Function(Pointer<Void> engine);
+typedef _Close = void Function(Pointer<Void> engine);
 typedef _FreeNative = Void Function(Pointer<Uint8> text);
 typedef _Free = void Function(Pointer<Uint8> text);
 
-class OrtEngine {
-  static final DynamicLibrary _lib = DynamicLibrary.open(
-    'libsuperscale_ort.so',
-  );
+class Engine {
+  static final DynamicLibrary _lib = DynamicLibrary.open('libsuperscale.so');
 
-  static final _init = _lib.lookupFunction<_InitNative, _Init>(
-    'superscale_init',
-  );
   static final _open = _lib.lookupFunction<_OpenNative, _Open>(
-    'superscale_open',
+    'sc_engine_open',
   );
-  static final _run = _lib.lookupFunction<_RunNative, _Run>('superscale_run');
-  static final _scale = _lib.lookupFunction<_ScaleNative, _Scale>(
-    'superscale_scale',
-  );
+  static final _run = _lib.lookupFunction<_RunNative, _Run>('sc_engine_run');
   static final _close = _lib.lookupFunction<_CloseNative, _Close>(
-    'superscale_close',
+    'sc_engine_close',
   );
   static final _free = _lib.lookupFunction<_FreeNative, _Free>(
-    'superscale_free_string',
+    'sc_engine_free_string',
   );
 
-  static bool _started = false;
-
-  static void _start() {
-    if (_started) return;
-    final err = malloc<Pointer<Uint8>>();
-    if (_init(err) != 0) {
-      final message = _takeError(err);
-      malloc.free(err);
-      throw StateError(message);
+  static String? _take(Pointer<Pointer<Uint8>> err) {
+    final ptr = err.value;
+    if (ptr.address == 0) return null;
+    try {
+      return ptr.cast<Utf8>().toDartString();
+    } finally {
+      _free(ptr);
     }
-    malloc.free(err);
-    _started = true;
-  }
-
-  static String _takeError(Pointer<Pointer<Uint8>> slot) {
-    final pointer = slot.value;
-    if (pointer == nullptr) return 'unknown error';
-    final message = pointer.cast<Utf8>().toDartString();
-    _free(pointer);
-    return message;
-  }
-
-  static OrtSession open({required String modelPath, required int threads}) {
-    _start();
-    final err = malloc<Pointer<Uint8>>();
-    final path = modelPath.toNativeUtf8();
-    final handle = _open(path, threads, err);
-    malloc.free(path);
-    if (handle == nullptr) {
-      final message = _takeError(err);
-      malloc.free(err);
-      throw StateError(message);
-    }
-    malloc.free(err);
-    return OrtSession._(handle);
   }
 }
 
-class OrtSession {
-  OrtSession._(this._handle);
+class Session {
+  Session._(this._handle, this.scale, this.maxSpan);
 
   final Pointer<Void> _handle;
+  final int scale;
+  final int maxSpan;
   bool _closed = false;
 
-  int get scale => OrtEngine._scale(_handle);
+  static Session open({
+    required String modelPath,
+    required Backend backend,
+    required int threads,
+  }) {
+    final path = modelPath.toNativeUtf8();
+    final scale = calloc<Int32>();
+    final maxSpan = calloc<Int32>();
+    final err = calloc<Pointer<Uint8>>();
+    try {
+      final handle = Engine._open(
+        path,
+        backend.index,
+        threads,
+        scale,
+        maxSpan,
+        err,
+      );
+      if (handle.address == 0) {
+        throw EngineFailure(Engine._take(err) ?? 'unknown error');
+      }
+      return Session._(handle, scale.value, maxSpan.value);
+    } finally {
+      calloc.free(path);
+      calloc.free(scale);
+      calloc.free(maxSpan);
+      calloc.free(err);
+    }
+  }
 
   ({int width, int height}) run({
     required Pointer<Uint8> rgba,
@@ -119,43 +129,41 @@ class OrtSession {
     required Pointer<Uint8> out,
     required int outCapacity,
   }) {
-    final err = malloc<Pointer<Uint8>>();
-    final outWidth = malloc<Int32>();
-    final outHeight = malloc<Int32>();
-    final code = OrtEngine._run(
-      _handle,
-      rgba,
-      width,
-      height,
-      out,
-      outCapacity,
-      outWidth,
-      outHeight,
-      err,
-    );
-    if (code != 0) {
-      final message = OrtEngine._takeError(err);
-      malloc.free(err);
-      malloc.free(outWidth);
-      malloc.free(outHeight);
-      throw StateError(message);
+    if (_closed) throw const EngineFailure('session closed');
+    final outWidth = calloc<Int32>();
+    final outHeight = calloc<Int32>();
+    final err = calloc<Pointer<Uint8>>();
+    try {
+      final rc = Engine._run(
+        _handle,
+        rgba,
+        width,
+        height,
+        out,
+        outCapacity,
+        outWidth,
+        outHeight,
+        err,
+      );
+      if (rc != 0) {
+        throw EngineFailure(Engine._take(err) ?? 'unknown error');
+      }
+      return (width: outWidth.value, height: outHeight.value);
+    } finally {
+      calloc.free(outWidth);
+      calloc.free(outHeight);
+      calloc.free(err);
     }
-    final result = (width: outWidth.value, height: outHeight.value);
-    malloc.free(err);
-    malloc.free(outWidth);
-    malloc.free(outHeight);
-    return result;
   }
 
   void close() {
     if (_closed) return;
     _closed = true;
-    OrtEngine._close(_handle);
+    Engine._close(_handle);
   }
 }
 
 int resolveThreads() {
   final cores = Platform.numberOfProcessors;
-  if (cores <= 1) return 1;
-  return cores < 4 ? cores : 4;
+  return cores > 2 ? cores - 1 : cores;
 }

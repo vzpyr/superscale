@@ -11,6 +11,8 @@ class LibraryBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (store.images.isEmpty) return const SizedBox.shrink();
+    final thumbnail = (Spacing.xxl * MediaQuery.devicePixelRatioOf(context))
+        .round();
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: const EdgeInsets.symmetric(horizontal: Spacing.lg),
@@ -26,7 +28,7 @@ class LibraryBar extends StatelessWidget {
                 avatar: CircleAvatar(
                   backgroundImage: ResizeImage(
                     FileImage(image.file),
-                    width: 96,
+                    width: thumbnail,
                   ),
                 ),
                 label: Text(image.sizeLabel),

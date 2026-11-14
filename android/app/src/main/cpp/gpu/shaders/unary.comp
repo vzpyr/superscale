@@ -1,0 +1,31 @@
+#version 450
+
+#include "pc.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Weights { float w[]; };
+layout(std430, binding = 1) buffer Arena { float a[]; };
+
+void main() {
+  const uint idx = gl_GlobalInvocationID.x;
+  const uint plane = pc.n1 * pc.n2;
+  const uint total = pc.n0 * plane;
+  if (idx >= total) {
+    return;
+  }
+  const uint c = idx / plane;
+  const float x = a[pc.in_off + idx];
+  float v;
+  if (pc.kind == 0u) {
+    v = x >= 0.0 ? x : x * pc.f0;
+  } else if (pc.kind == 1u) {
+    v = clamp(x, pc.f0, pc.f1);
+  } else if (pc.kind == 2u) {
+    const float slope = w[pc.w_off + min(c, pc.n0 - 1u)];
+    v = x >= 0.0 ? x : x * slope;
+  } else {
+    v = x;
+  }
+  a[pc.out_off + idx] = v;
+}

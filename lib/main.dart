@@ -26,16 +26,11 @@ class _SuperscaleAppState extends State<SuperscaleApp> {
   }
 
   Future<void> _loadDynamicColors() async {
-    final light = await SystemDynamicColorService.getDynamicColorScheme(
-      brightness: Brightness.light,
-    );
-    final dark = await SystemDynamicColorService.getDynamicColorScheme(
-      brightness: Brightness.dark,
-    );
-    if (mounted && (light != null || dark != null)) {
+    final schemes = await SystemDynamicColorService.resolveDynamicSchemes();
+    if (mounted && (schemes.light != null || schemes.dark != null)) {
       setState(() {
-        _dynamicLight = light;
-        _dynamicDark = dark;
+        _dynamicLight = schemes.light;
+        _dynamicDark = schemes.dark;
       });
     }
   }

@@ -1,0 +1,21 @@
+layout(push_constant) uniform PC {
+  uint out_off;
+  uint in_off;
+  uint in2_off;
+  uint w_off;
+  uint b_off;
+  uint n0;
+  uint n1;
+  uint n2;
+  uint n3;
+  uint n4;
+  uint n5;
+  uint n6;
+  uint n7;
+  uint s0[4];
+  uint s1[4];
+  float f0;
+  float f1;
+  float f2;
+  uint kind;
+} pc;

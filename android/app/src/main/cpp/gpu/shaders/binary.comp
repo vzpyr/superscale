@@ -1,0 +1,24 @@
+#version 450
+
+#include "pc.glsl"
+
+layout(local_size_x = 256) in;
+
+layout(std430, binding = 0) readonly buffer Weights { float w[]; };
+layout(std430, binding = 1) buffer Arena { float a[]; };
+
+void main() {
+  const uint idx = gl_GlobalInvocationID.x;
+  const uint total = pc.n0 * pc.n1 * pc.n2;
+  if (idx >= total) {
+    return;
+  }
+  const uint x = idx % pc.n2;
+  const uint y = (idx / pc.n2) % pc.n1;
+  const uint c = idx / (pc.n1 * pc.n2);
+  const uint off = c * pc.s0[0] + y * pc.s0[1] + x * pc.s0[2];
+  const uint off2 = c * pc.s1[0] + y * pc.s1[1] + x * pc.s1[2];
+  const float av = a[pc.in_off + off];
+  const float bv = a[pc.in2_off + off2];
+  a[pc.out_off + idx] = pc.kind == 0u ? av + bv : av * bv;
+}

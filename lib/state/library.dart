@@ -13,9 +13,6 @@ import '../engine/native.dart';
 import '../engine/worker.dart';
 import '../models.dart';
 
-const int maxOutputSide = 8192;
-const int maxOutputPixels = 24000000;
-
 enum RunMode { selected, all }
 
 class LibraryImage {
@@ -53,6 +50,7 @@ class LibraryStore extends ChangeNotifier {
   String? selectedId;
   UpscaleModel model = models.firstWhere((m) => m.id == 'upscayl-standard-4x');
   RunMode? runMode;
+  Backend backend = Backend.cpu;
   bool cancelling = false;
   String? status;
   double? progress;
@@ -108,9 +106,10 @@ class LibraryStore extends ChangeNotifier {
           height: size.height,
         );
         if (await output.exists()) {
+          final outSize = await imageSize(output);
           image.output = output;
-          image.outputWidth = size.width * 4;
-          image.outputHeight = size.height * 4;
+          image.outputWidth = outSize.width;
+          image.outputHeight = outSize.height;
           image.outputBytes = await output.length();
         }
         found.add(image);
@@ -142,7 +141,7 @@ class LibraryStore extends ChangeNotifier {
     for (final item in picked) {
       try {
         final id = _newId();
-        final name = item.name.toLowerCase();
+        final name = item.name;
         final target = File('${_imageDir!.path}/${id}_$name');
         await item.saveTo(target.path);
         final size = await imageSize(target);
@@ -180,8 +179,10 @@ class LibraryStore extends ChangeNotifier {
 
   Future<void> remove(String id) async {
     if (busy) return;
-    final image = images.firstWhere((item) => item.id == id);
-    images.remove(image);
+    final index = images.indexWhere((item) => item.id == id);
+    if (index < 0) return;
+    final image = images[index];
+    images.removeAt(index);
     if (selectedId == id) selectedId = images.isEmpty ? null : images.first.id;
     notifyListeners();
     try {
@@ -309,6 +310,12 @@ class LibraryStore extends ChangeNotifier {
     return '${base}_upscaled.png';
   }
 
+  void chooseBackend(Backend value) {
+    if (busy || backend == value) return;
+    backend = value;
+    notifyListeners();
+  }
+
   String? takeMessage() {
     final message = _pendingMessage;
     _pendingMessage = null;
@@ -329,7 +336,9 @@ class LibraryStore extends ChangeNotifier {
         cancelled = true;
         break;
       } catch (error) {
-        _pendingMessage = error is _StageError ? error.message : '$error';
+        _pendingMessage = error is _StageError
+            ? error.message
+            : 'Could not upscale image: $error';
         break;
       }
     }
@@ -373,17 +382,6 @@ class LibraryStore extends ChangeNotifier {
       throw _StageError('Could not open image: $error');
     }
 
-    const scale = 4;
-    final outWidth = source.width * scale;
-    final outHeight = source.height * scale;
-    if (outWidth > maxOutputSide ||
-        outHeight > maxOutputSide ||
-        outWidth * outHeight > maxOutputPixels) {
-      throw const _StageError(
-        'Could not upscale image: output exceeds 8192 px or 24 MP',
-      );
-    }
-
     status = 'Loading model';
     progress = null;
     _emit();
@@ -392,6 +390,7 @@ class LibraryStore extends ChangeNotifier {
     try {
       final worker = _worker ??= await UpscaleWorker.instance();
       result = await worker.upscale(
+        backend: backend,
         modelPath: weights.path,
         threads: resolveThreads(),
         pixels: source.pixels,
@@ -406,7 +405,9 @@ class LibraryStore extends ChangeNotifier {
     } on UpscaleCancelled {
       rethrow;
     } catch (error) {
-      throw _StageError('Could not upscale image: $error');
+      throw _StageError(
+        'Could not upscale image: ${error is UpscaleFailure ? error.reason : error}',
+      );
     }
 
     status = 'Saving result';

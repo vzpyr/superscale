@@ -1,0 +1,48 @@
+#version 450
+
+#include "pc.glsl"
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 4) in;
+
+layout(std430, binding = 0) readonly buffer Weights { float w[]; };
+layout(std430, binding = 1) buffer Arena { float a[]; };
+
+void main() {
+  const uint x = gl_GlobalInvocationID.x;
+  const uint y = gl_GlobalInvocationID.y;
+  const uint c = gl_GlobalInvocationID.z;
+  if (c >= pc.n0 || y >= pc.n3 || x >= pc.n4) {
+    return;
+  }
+  const uint plane = pc.n1 * pc.n2;
+  const uint src = pc.in_off + c * plane;
+
+  if (pc.n6 != 0u) {
+    const float oy = pc.n5 != 0u ? float(y) : (float(y) + 0.5) * pc.f0 - 0.5;
+    const float ox = pc.n5 != 0u ? float(x) : (float(x) + 0.5) * pc.f1 - 0.5;
+    const float sy = pc.n5 != 0u ? float(y) * pc.f0 : oy;
+    const float sx = pc.n5 != 0u ? float(x) * pc.f1 : ox;
+    const int yy = clamp(int(floor(sy)), 0, int(pc.n1) - 1);
+    const int xx = clamp(int(floor(sx)), 0, int(pc.n2) - 1);
+    a[pc.out_off + c * pc.n3 * pc.n4 + y * pc.n4 + x] = a[src + uint(yy) * pc.n2 + uint(xx)];
+    return;
+  }
+
+  const float sy = (float(y) + 0.5) * pc.f0 - 0.5;
+  const float sx = (float(x) + 0.5) * pc.f1 - 0.5;
+  const int y0 = int(floor(sy));
+  const int x0 = int(floor(sx));
+  const float fy = sy - float(y0);
+  const float fx = sx - float(x0);
+  float acc = 0.0;
+  for (int dy = 0; dy < 2; ++dy) {
+    for (int dx = 0; dx < 2; ++dx) {
+      const int yy = clamp(y0 + dy, 0, int(pc.n1) - 1);
+      const int xx = clamp(x0 + dx, 0, int(pc.n2) - 1);
+      const float wy = dy == 0 ? 1.0 - fy : fy;
+      const float wx = dx == 0 ? 1.0 - fx : fx;
+      acc += wy * wx * a[src + uint(yy) * pc.n2 + uint(xx)];
+    }
+  }
+  a[pc.out_off + c * pc.n3 * pc.n4 + y * pc.n4 + x] = acc;
+}

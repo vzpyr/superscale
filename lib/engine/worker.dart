@@ -20,6 +20,18 @@ class UpscaleOutput {
   final int height;
 }
 
+class UpscaleFailure implements Exception {
+  const UpscaleFailure(this.reason);
+
+  final String reason;
+
+  @override
+  String toString() => reason;
+}
+
+const int maxOutputSide = 8192;
+const int maxOutputPixels = 24000000;
+
 class UpscaleWorker {
   UpscaleWorker._(this._commands, this._events);
 
@@ -58,6 +70,7 @@ class UpscaleWorker {
   }
 
   Future<UpscaleOutput> upscale({
+    required Backend backend,
     required String modelPath,
     required int threads,
     required Uint8List pixels,
@@ -76,6 +89,7 @@ class UpscaleWorker {
       threads,
       width,
       height,
+      backend.index,
     ]);
     return job.completer.future;
   }
@@ -103,7 +117,7 @@ class UpscaleWorker {
         job.completer.completeError(const UpscaleCancelled());
       case 'error':
         _jobs.remove(list[0] as int);
-        job.completer.completeError(StateError(list[2] as String));
+        job.completer.completeError(UpscaleFailure(list[2] as String));
     }
   }
 
@@ -119,11 +133,28 @@ class _Job {
   final Completer<UpscaleOutput> completer = Completer();
 }
 
+class _SessionKey {
+  const _SessionKey(this.backend, this.modelPath);
+
+  final Backend backend;
+  final String modelPath;
+
+  @override
+  bool operator ==(Object other) =>
+      other is _SessionKey &&
+      other.backend == backend &&
+      other.modelPath == modelPath;
+
+  @override
+  int get hashCode => Object.hash(backend, modelPath);
+}
+
 void upscaleWorkerMain(SendPort ready) {
   final inbox = ReceivePort();
   ready.send(inbox.sendPort);
-  final sessions = <String, OrtSession>{};
+  final sessions = <_SessionKey, Session>{};
   var cancelled = false;
+  var queue = Future<void>.value();
 
   inbox.listen((message) {
     final list = message as List<Object?>;
@@ -132,13 +163,13 @@ void upscaleWorkerMain(SendPort ready) {
       return;
     }
     cancelled = false;
-    unawaited(_handle(list, sessions, () => cancelled));
+    queue = queue.then((_) => _handle(list, sessions, () => cancelled));
   });
 }
 
 Future<void> _handle(
   List<Object?> list,
-  Map<String, OrtSession> sessions,
+  Map<_SessionKey, Session> sessions,
   bool Function() isCancelled,
 ) async {
   final id = list[0] as int;
@@ -146,6 +177,7 @@ Future<void> _handle(
   try {
     final output = await _upscale(
       sessions: sessions,
+      backend: Backend.values[list[7] as int],
       modelPath: list[3] as String,
       threads: list[4] as int,
       pixels: (list[2] as TransferableTypedData).materialize().asUint8List(),
@@ -164,12 +196,60 @@ Future<void> _handle(
   } on UpscaleCancelled {
     reply.send([id, 'cancelled']);
   } catch (error) {
-    reply.send([id, 'error', error.toString()]);
+    reply.send([id, 'error', _reason(error)]);
   }
 }
 
+Session _session(
+  Map<_SessionKey, Session> sessions,
+  Backend backend,
+  String modelPath,
+  int threads,
+) {
+  final key = _SessionKey(backend, modelPath);
+  final existing = sessions[key];
+  if (existing != null) return existing;
+  for (final session in sessions.values) {
+    session.close();
+  }
+  sessions.clear();
+  final opened = Session.open(
+    modelPath: modelPath,
+    backend: backend,
+    threads: threads,
+  );
+  sessions[key] = opened;
+  return opened;
+}
+
+({int tile, int margin}) _tiling(
+  Backend backend,
+  int width,
+  int height,
+  int maxSpan,
+) {
+  final longest = width > height ? width : height;
+  if (backend == Backend.cpu) {
+    if (longest <= 64) return (tile: 64, margin: 8);
+    if (longest <= 128) return (tile: 128, margin: 16);
+    return (tile: 256, margin: 16);
+  }
+  final limit = maxSpan > 0 ? maxSpan : 64;
+  ({int tile, int margin}) best = (tile: limit, margin: 0);
+  for (final tile in const [64, 96, 128, 192, 256]) {
+    if (tile > limit) break;
+    final margin = (limit - tile) ~/ 2 < tile ~/ 8
+        ? (limit - tile) ~/ 2
+        : tile ~/ 8;
+    best = (tile: tile, margin: margin);
+    if (tile >= longest) break;
+  }
+  return best;
+}
+
 Future<UpscaleOutput> _upscale({
-  required Map<String, OrtSession> sessions,
+  required Map<_SessionKey, Session> sessions,
+  required Backend backend,
   required String modelPath,
   required int threads,
   required Uint8List pixels,
@@ -178,15 +258,16 @@ Future<UpscaleOutput> _upscale({
   required bool Function() isCancelled,
   required void Function(int done, int total) onProgress,
 }) async {
-  var session = sessions[modelPath];
-  if (session == null) {
-    session = _openSession(modelPath, threads);
-    sessions[modelPath] = session;
-  }
-
+  final session = _session(sessions, backend, modelPath, threads);
   final scale = session.scale;
-  final tile = _pickTile(width, height);
-  final margin = tile >= 128 ? 16 : 8;
+  if (width * scale > maxOutputSide ||
+      height * scale > maxOutputSide ||
+      width * scale * height * scale > maxOutputPixels) {
+    throw const UpscaleFailure('output exceeds 8192 px or 24 MP');
+  }
+  final tiling = _tiling(backend, width, height, session.maxSpan);
+  final tile = tiling.tile;
+  final margin = tiling.margin;
   final span = tile + margin * 2;
   final tilesX = (width + tile - 1) ~/ tile;
   final tilesY = (height + tile - 1) ~/ tile;
@@ -217,12 +298,12 @@ Future<UpscaleOutput> _upscale({
           out: result,
           outCapacity: span * scale * span * scale * 4,
         );
+        if (produced.width != span * scale || produced.height != span * scale) {
+          throw const UpscaleFailure('unexpected output size');
+        }
 
-        final tilePixels = result.asTypedList(
-          produced.width * produced.height * 4,
-        );
         _blit(
-          tilePixels,
+          result.asTypedList(produced.width * produced.height * 4),
           produced.width,
           outWidth,
           coreX * scale,
@@ -246,17 +327,6 @@ Future<UpscaleOutput> _upscale({
   return UpscaleOutput(pixels: output, width: outWidth, height: outHeight);
 }
 
-OrtSession _openSession(String modelPath, int threads) {
-  return OrtEngine.open(modelPath: modelPath, threads: threads);
-}
-
-int _pickTile(int width, int height) {
-  final longest = width > height ? width : height;
-  if (longest <= 64) return 64;
-  if (longest <= 128) return 128;
-  return 256;
-}
-
 void _fillTile(
   Uint8List source,
   int width,
@@ -268,43 +338,16 @@ void _fillTile(
   Pointer<Uint8> target,
 ) {
   final view = target.asTypedList(span * span * 4);
-  final startX = coreX - margin;
-  final startY = coreY - margin;
-  final stride = width * 4;
-
-  if (startX >= 0 &&
-      startY >= 0 &&
-      startX + span <= width &&
-      startY + span <= height) {
-    for (var y = 0; y < span; y++) {
-      final sourceOffset = (startY + y) * stride + startX * 4;
-      view.setRange(y * span * 4, (y + 1) * span * 4, source, sourceOffset);
-    }
-    return;
-  }
-
-  var offset = 0;
   for (var y = 0; y < span; y++) {
-    var sourceY = startY + y;
-    if (sourceY < 0) {
-      sourceY = 0;
-    } else if (sourceY >= height) {
-      sourceY = height - 1;
-    }
-    final row = sourceY * stride;
+    final srcY = (coreY - margin + y).clamp(0, height - 1);
     for (var x = 0; x < span; x++) {
-      var sourceX = startX + x;
-      if (sourceX < 0) {
-        sourceX = 0;
-      } else if (sourceX >= width) {
-        sourceX = width - 1;
-      }
-      final index = row + sourceX * 4;
-      view[offset] = source[index];
-      view[offset + 1] = source[index + 1];
-      view[offset + 2] = source[index + 2];
-      view[offset + 3] = 255;
-      offset += 4;
+      final srcX = (coreX - margin + x).clamp(0, width - 1);
+      final from = (srcY * width + srcX) * 4;
+      final to = (y * span + x) * 4;
+      view[to] = source[from];
+      view[to + 1] = source[from + 1];
+      view[to + 2] = source[from + 2];
+      view[to + 3] = 255;
     }
   }
 }
@@ -312,20 +355,23 @@ void _fillTile(
 void _blit(
   Uint8List tile,
   int tileWidth,
-  int destWidth,
-  int destX,
-  int destY,
+  int outWidth,
+  int dstX,
+  int dstY,
   int copyWidth,
   int copyHeight,
-  int margin,
-  Uint8List target,
+  int offset,
+  Uint8List output,
 ) {
-  final sourceStride = tileWidth * 4;
-  final targetStride = destWidth * 4;
-  final rowBytes = copyWidth * 4;
   for (var y = 0; y < copyHeight; y++) {
-    final sourceOffset = (margin + y) * sourceStride + margin * 4;
-    final targetOffset = (destY + y) * targetStride + destX * 4;
-    target.setRange(targetOffset, targetOffset + rowBytes, tile, sourceOffset);
+    final srcRow = ((y + offset) * tileWidth + offset) * 4;
+    final dstRow = ((dstY + y) * outWidth + dstX) * 4;
+    output.setRange(dstRow, dstRow + copyWidth * 4, tile, srcRow);
   }
 }
+
+String _reason(Object error) => error is UpscaleFailure
+    ? error.reason
+    : error is EngineFailure
+    ? error.message
+    : 'unknown error';
