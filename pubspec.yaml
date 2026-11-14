@@ -19,6 +19,7 @@ dependencies:
   ffi: ^2.2.0
   gal: ^3.0.0
   image_picker: ^1.2.4
+  material_color_utilities: ^0.13.0
   path_provider: ^2.1.6
   share_plus: ^13.3.1
 

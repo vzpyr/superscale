@@ -1,10 +1,20 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'system_dynamic_color_service.dart';
 import 'theme.dart';
 import 'ui/home.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
+  SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      systemNavigationBarColor: Colors.transparent,
+      systemNavigationBarDividerColor: Colors.transparent,
+    ),
+  );
   runApp(const SuperscaleApp());
 }
 
@@ -26,11 +36,16 @@ class _SuperscaleAppState extends State<SuperscaleApp> {
   }
 
   Future<void> _loadDynamicColors() async {
-    final schemes = await SystemDynamicColorService.resolveDynamicSchemes();
-    if (mounted && (schemes.light != null || schemes.dark != null)) {
+    final light = await SystemDynamicColorService.getDynamicColorScheme(
+      brightness: Brightness.light,
+    );
+    final dark = await SystemDynamicColorService.getDynamicColorScheme(
+      brightness: Brightness.dark,
+    );
+    if (mounted && (light != null || dark != null)) {
       setState(() {
-        _dynamicLight = schemes.light;
-        _dynamicDark = schemes.dark;
+        _dynamicLight = light;
+        _dynamicDark = dark;
       });
     }
   }
