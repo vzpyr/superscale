@@ -1,0 +1,28 @@
+name: superscale
+publish_to: "none"
+version: 1.0.0+1
+
+flutter:
+  uses-material-design: true
+  fonts:
+    - family: Google Sans
+      fonts:
+        - asset: assets/fonts/GoogleSansFlex.ttf
+
+environment:
+  sdk: ^3.13.7
+
+dependencies:
+  flutter:
+    sdk: flutter
+  dynamic_color: ^2.1.0
+  ffi: ^2.2.0
+  gal: ^3.0.0
+  image_picker: ^1.2.4
+  material_color_utilities: ^0.13.0
+  path_provider: ^2.1.6
+  share_plus: ^13.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
