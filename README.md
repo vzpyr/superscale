@@ -16,7 +16,7 @@ Minimal Android AI image upscaler
 - Interactive split comparison slider
 - Batch queue processing with per-tile progress and cancel
 - Material You dynamic color
-- Zero telemetry, server uploads, or image retention
+- Zero telemetry and server uploads
 
 ## Android
 
