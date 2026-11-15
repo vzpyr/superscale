@@ -1,5 +1,6 @@
 import pathlib
-import sys
+import subprocess
+import tempfile
 
 COV = 16
 CICH = 4
@@ -13,7 +14,7 @@ PD = TILEX + 2
 PN = PD * PD * CICH
 
 
-def build() -> str:
+def build_conv() -> str:
     L = []
     add = L.append
     add("#version 450")
@@ -111,8 +112,59 @@ def build() -> str:
     return "\n".join(L)
 
 
+def main() -> None:
+    root = pathlib.Path(__file__).resolve().parent
+    src = root / "android" / "app" / "src" / "main" / "cpp" / "gpu"
+    conv_comp = src / "shaders" / "conv.comp"
+    conv_comp.write_text(build_conv())
+
+    names = ["conv", "unary", "binary", "resize", "d2s"]
+    lines = [
+        "#ifndef SUPERSCALE_SPIRV_H",
+        "#define SUPERSCALE_SPIRV_H",
+        "",
+        "#include <stdint.h>",
+        "",
+    ]
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp = pathlib.Path(tmp_dir)
+        for name in names:
+            spv = tmp / f"{name}.spv"
+            subprocess.run(
+                [
+                    "glslc",
+                    "--target-env=vulkan1.0",
+                    "-O",
+                    f"-I{src}",
+                    "-o",
+                    str(spv),
+                    str(src / "shaders" / f"{name}.comp"),
+                ],
+                check=True,
+            )
+            subprocess.run(["spirv-val", str(spv)], check=True)
+
+            data = spv.read_bytes()
+            words = [
+                int.from_bytes(data[i : i + 4], "little")
+                for i in range(0, len(data), 4)
+            ]
+            lines.append(f"static const uint32_t sc_spv_{name}[] = {{")
+            for i in range(0, len(words), 12):
+                lines.append(
+                    "    "
+                    + ", ".join(f"0x{w:08x}u" for w in words[i : i + 12])
+                    + ","
+                )
+            lines.append("};")
+            lines.append(f"static const uint32_t sc_spv_{name}_words = {len(words)}u;")
+            lines.append("")
+
+    lines.append("#endif")
+    dst = src / "spirv.h"
+    dst.write_text("\n".join(lines) + "\n")
+
+
 if __name__ == "__main__":
-    out = pathlib.Path(sys.argv[1])
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(build())
-    print(f"wrote {out}")
+    main()
