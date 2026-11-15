@@ -9,17 +9,17 @@ typedef struct {
   uint32_t key;
   int kind;
   int64_t i64;
-  const uint8_t* data;
+  const uint8_t *data;
   size_t len;
 } pb_field;
 
 typedef struct {
-  const uint8_t* p;
+  const uint8_t *p;
   size_t n;
   size_t i;
 } pb;
 
-static int pb_varint(const uint8_t* p, size_t n, size_t* i, uint64_t* out) {
+static int pb_varint(const uint8_t *p, size_t n, size_t *i, uint64_t *out) {
   uint64_t v = 0;
   int shift = 0;
   while (*i < n && shift < 64) {
@@ -34,7 +34,7 @@ static int pb_varint(const uint8_t* p, size_t n, size_t* i, uint64_t* out) {
   return 1;
 }
 
-static int pb_next(pb* r, pb_field* f) {
+static int pb_next(pb *r, pb_field *f) {
   if (r->i >= r->n) {
     return 1;
   }
@@ -70,12 +70,16 @@ static int pb_next(pb* r, pb_field* f) {
       return 1;
     }
     f->kind = 3;
+    f->data = r->p + r->i;
+    f->len = 4;
     r->i += 4;
   } else if (wire == 1) {
     if (r->i + 8 > r->n) {
       return 1;
     }
     f->kind = 4;
+    f->data = r->p + r->i;
+    f->len = 8;
     r->i += 8;
   } else {
     return 1;
@@ -83,7 +87,7 @@ static int pb_next(pb* r, pb_field* f) {
   return 0;
 }
 
-static const pb_field* pb_find(const pb_field* items, int n, uint32_t key) {
+static const pb_field *pb_find(const pb_field *items, int n, uint32_t key) {
   for (int i = 0; i < n; i++) {
     if (items[i].key == key) {
       return &items[i];
@@ -92,12 +96,12 @@ static const pb_field* pb_find(const pb_field* items, int n, uint32_t key) {
   return NULL;
 }
 
-static int pb_text(const pb_field* items, int n, uint32_t key, char** out) {
-  const pb_field* f = pb_find(items, n, key);
+static int pb_text(const pb_field *items, int n, uint32_t key, char **out) {
+  const pb_field *f = pb_find(items, n, key);
   if (!f || f->kind != 2) {
     return 1;
   }
-  char* buf = (char*)malloc(f->len + 1);
+  char *buf = (char *)malloc(f->len + 1);
   if (!buf) {
     return 1;
   }
@@ -107,12 +111,13 @@ static int pb_text(const pb_field* items, int n, uint32_t key, char** out) {
   return 0;
 }
 
-static int pb_int(const pb_field* items, int n, uint32_t key, int fallback) {
-  const pb_field* f = pb_find(items, n, key);
+static int pb_int(const pb_field *items, int n, uint32_t key, int fallback) {
+  const pb_field *f = pb_find(items, n, key);
   return f && f->kind == 0 ? (int)f->i64 : fallback;
 }
 
-static void pb_ints(const pb_field* items, int n, uint32_t key, int64_t* out, int cap, int* count) {
+static void pb_ints(const pb_field *items, int n, uint32_t key, int64_t *out,
+                    int cap, int *count) {
   int total = 0;
   for (int i = 0; i < n; i++) {
     if (items[i].key != key) {
@@ -140,7 +145,8 @@ static void pb_ints(const pb_field* items, int n, uint32_t key, int64_t* out, in
   *count = total;
 }
 
-static void pb_floats(const pb_field* items, int n, uint32_t key, float* out, int cap, int* count) {
+static void pb_floats(const pb_field *items, int n, uint32_t key, float *out,
+                      int cap, int *count) {
   int total = 0;
   for (int i = 0; i < n; i++) {
     if (items[i].key != key || items[i].kind != 2) {
@@ -157,14 +163,15 @@ static void pb_floats(const pb_field* items, int n, uint32_t key, float* out, in
   *count = total;
 }
 
-static pb_field* pb_slice(const uint8_t* p, size_t n, int* count) {
+static pb_field *pb_slice(const uint8_t *p, size_t n, int *count) {
   pb r = {p, n, 0};
   pb_field tmp;
   int c = 0;
   while (!pb_next(&r, &tmp)) {
     c++;
   }
-  pb_field* items = (pb_field*)calloc((size_t)(c > 0 ? c : 1), sizeof(pb_field));
+  pb_field *items =
+      (pb_field *)calloc((size_t)(c > 0 ? c : 1), sizeof(pb_field));
   if (!items) {
     *count = 0;
     return NULL;
@@ -179,12 +186,12 @@ static pb_field* pb_slice(const uint8_t* p, size_t n, int* count) {
 }
 
 typedef struct {
-  char** names;
+  char **names;
   int n;
   int cap;
 } big_pool;
 
-static int big_find(big_pool* pool, const char* name) {
+static int big_find(big_pool *pool, const char *name) {
   for (int i = 0; i < pool->n; i++) {
     if (strcmp(pool->names[i], name) == 0) {
       return i;
@@ -193,14 +200,14 @@ static int big_find(big_pool* pool, const char* name) {
   return -1;
 }
 
-static int big_add(big_pool* pool, const char* name) {
+static int big_add(big_pool *pool, const char *name) {
   int found = big_find(pool, name);
   if (found >= 0) {
     return found;
   }
   if (pool->n == pool->cap) {
     int cap = pool->cap ? pool->cap * 2 : 256;
-    char** grown = (char**)realloc(pool->names, (size_t)cap * sizeof(char*));
+    char **grown = (char **)realloc(pool->names, (size_t)cap * sizeof(char *));
     if (!grown) {
       return -1;
     }
@@ -208,7 +215,7 @@ static int big_add(big_pool* pool, const char* name) {
     pool->cap = cap;
   }
   size_t len = strlen(name);
-  char* copy = (char*)malloc(len + 1);
+  char *copy = (char *)malloc(len + 1);
   if (!copy) {
     return -1;
   }
@@ -217,17 +224,20 @@ static int big_add(big_pool* pool, const char* name) {
   return pool->n++;
 }
 
-static int tensor_from_pb(const pb_field* t, int tn, char* name, sc_tensor* dst) {
+static int tensor_from_pb(const pb_field *t, int tn, char *name,
+                          sc_tensor *dst) {
   int64_t dims[4] = {1, 1, 1, 1};
   int total = 0;
   pb_ints(t, tn, 1, dims, 4, &total);
-  if (total > 4) return 1;
+  if (total > 4)
+    return 1;
   int64_t shape[4] = {1, 1, 1, 1};
   for (int d = 0; d < total && d < 4; d++) {
     shape[d] = dims[d] > 0 ? dims[d] : 1;
   }
-  size_t count = (size_t)shape[0] * (size_t)shape[1] * (size_t)shape[2] * (size_t)shape[3];
-  float* values = (float*)calloc(count ? count : 1, sizeof(float));
+  size_t count =
+      (size_t)shape[0] * (size_t)shape[1] * (size_t)shape[2] * (size_t)shape[3];
+  float *values = (float *)calloc(count ? count : 1, sizeof(float));
   if (!values) {
     return 1;
   }
@@ -236,7 +246,7 @@ static int tensor_from_pb(const pb_field* t, int tn, char* name, sc_tensor* dst)
     int got = 0;
     pb_floats(t, tn, 4, values, (int)count, &got);
     if (got == 0) {
-      const pb_field* raw = pb_find(t, tn, 9);
+      const pb_field *raw = pb_find(t, tn, 9);
       if (raw && raw->kind == 2) {
         int avail = (int)(raw->len / 4u);
         for (int j = 0; j < avail && j < (int)count; j++) {
@@ -245,7 +255,7 @@ static int tensor_from_pb(const pb_field* t, int tn, char* name, sc_tensor* dst)
       }
     }
   } else if (data_type == 6 || data_type == 7) {
-    int64_t* ints = (int64_t*)calloc(count ? count : 1, sizeof(int64_t));
+    int64_t *ints = (int64_t *)calloc(count ? count : 1, sizeof(int64_t));
     if (!ints) {
       free(values);
       return 1;
@@ -253,7 +263,7 @@ static int tensor_from_pb(const pb_field* t, int tn, char* name, sc_tensor* dst)
     int got = 0;
     pb_ints(t, tn, data_type == 6 ? 5 : 7, ints, (int)count, &got);
     if (got == 0) {
-      const pb_field* raw = pb_find(t, tn, 9);
+      const pb_field *raw = pb_find(t, tn, 9);
       if (raw && raw->kind == 2) {
         const size_t width = data_type == 6 ? 4u : 8u;
         const int avail = (int)(raw->len / width);
@@ -282,13 +292,13 @@ static int tensor_from_pb(const pb_field* t, int tn, char* name, sc_tensor* dst)
     dst->dims[d] = shape[d];
   }
   dst->count = count;
-  dst->data = (uint8_t*)values;
+  dst->data = (uint8_t *)values;
   dst->is_const = 1;
   return 0;
 }
 
-int sc_model_load(const char* path, sc_model* model, char** err) {
-  FILE* fp = fopen(path, "rb");
+int sc_model_load(const char *path, sc_model *model, char **err) {
+  FILE *fp = fopen(path, "rb");
   if (!fp) {
     return sc_err(err, "could not open model");
   }
@@ -299,7 +309,7 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
     fclose(fp);
     return sc_err(err, "empty model");
   }
-  uint8_t* buf = (uint8_t*)malloc((size_t)size);
+  uint8_t *buf = (uint8_t *)malloc((size_t)size);
   if (!buf) {
     fclose(fp);
     return sc_err(err, "out of memory");
@@ -313,12 +323,12 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
   memset(model, 0, sizeof(*model));
 
   int top = 0;
-  pb_field* root = pb_slice(buf, (size_t)size, &top);
+  pb_field *root = pb_slice(buf, (size_t)size, &top);
   if (!root) {
     free(buf);
     return sc_err(err, "could not parse model");
   }
-  const pb_field* graph = pb_find(root, top, 7);
+  const pb_field *graph = pb_find(root, top, 7);
   if (!graph || graph->kind != 2) {
     free(root);
     free(buf);
@@ -326,7 +336,7 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
   }
 
   int gn = 0;
-  pb_field* g = pb_slice(graph->data, graph->len, &gn);
+  pb_field *g = pb_slice(graph->data, graph->len, &gn);
   if (!g) {
     free(root);
     free(buf);
@@ -340,7 +350,8 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
     }
   }
 
-  sc_node* out_nodes = (sc_node*)calloc((size_t)(node_count ? node_count : 1), sizeof(sc_node));
+  sc_node *out_nodes =
+      (sc_node *)calloc((size_t)(node_count ? node_count : 1), sizeof(sc_node));
   if (!out_nodes) {
     free(g);
     free(root);
@@ -357,7 +368,8 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
 
   big_pool pool = {NULL, 0, 0};
   int tensor_cap = inits + node_count + 16;
-  sc_tensor* tensors = (sc_tensor*)calloc((size_t)tensor_cap, sizeof(sc_tensor));
+  sc_tensor *tensors =
+      (sc_tensor *)calloc((size_t)tensor_cap, sizeof(sc_tensor));
   if (!tensors) {
     free(out_nodes);
     free(g);
@@ -372,18 +384,19 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
       continue;
     }
     int tn = 0;
-    pb_field* t = pb_slice(g[i].data, g[i].len, &tn);
+    pb_field *t = pb_slice(g[i].data, g[i].len, &tn);
     if (!t) {
       continue;
     }
-    char* name = NULL;
+    char *name = NULL;
     if (pb_text(t, tn, 8, &name) || !name) {
       free(t);
       continue;
     }
     int id = big_add(&pool, name);
     free(name);
-    if (id >= 0 && !tensor_from_pb(t, tn, pool.names[id], &tensors[n_tensors])) {
+    if (id >= 0 &&
+        !tensor_from_pb(t, tn, pool.names[id], &tensors[n_tensors])) {
       n_tensors++;
     }
     free(t);
@@ -396,23 +409,23 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
       continue;
     }
     int nn = 0;
-    pb_field* nd = pb_slice(g[i].data, g[i].len, &nn);
+    pb_field *nd = pb_slice(g[i].data, g[i].len, &nn);
     if (!nd) {
       continue;
     }
-    char* op_type = NULL;
+    char *op_type = NULL;
     pb_text(nd, nn, 4, &op_type);
     if (!op_type) {
       free(nd);
       continue;
     }
     int in_count = 0;
-    char* in_names[16];
+    char *in_names[16];
     for (int k = 0; k < nn && in_count < 16; k++) {
       if (nd[k].key != 1 || nd[k].kind != 2) {
         continue;
       }
-      char* tmp = (char*)malloc(nd[k].len + 1);
+      char *tmp = (char *)malloc(nd[k].len + 1);
       if (!tmp) {
         continue;
       }
@@ -420,12 +433,12 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
       tmp[nd[k].len] = 0;
       in_names[in_count++] = tmp;
     }
-    char* out_name = NULL;
+    char *out_name = NULL;
     for (int k = 0; k < nn && !out_name; k++) {
       if (nd[k].key != 2 || nd[k].kind != 2) {
         continue;
       }
-      char* tmp = (char*)malloc(nd[k].len + 1);
+      char *tmp = (char *)malloc(nd[k].len + 1);
       if (!tmp) {
         continue;
       }
@@ -434,22 +447,24 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
       out_name = tmp;
     }
 
-    if (strcmp(op_type, "Constant") == 0 && out_name && n_tensors < tensor_cap) {
+    if (strcmp(op_type, "Constant") == 0 && out_name &&
+        n_tensors < tensor_cap) {
       for (int k = 0; k < nn; k++) {
         if (nd[k].key != 5 || nd[k].kind != 2) {
           continue;
         }
         int an = 0;
-        pb_field* at = pb_slice(nd[k].data, nd[k].len, &an);
+        pb_field *at = pb_slice(nd[k].data, nd[k].len, &an);
         if (!at) {
           continue;
         }
-        const pb_field* tp = pb_find(at, an, 5);
+        const pb_field *tp = pb_find(at, an, 5);
         if (tp && tp->kind == 2) {
           int vn = 0;
-          pb_field* vt = pb_slice(tp->data, tp->len, &vn);
+          pb_field *vt = pb_slice(tp->data, tp->len, &vn);
           int id = vt ? big_add(&pool, out_name) : -1;
-          if (id >= 0 && !tensor_from_pb(vt, vn, pool.names[id], &tensors[n_tensors])) {
+          if (id >= 0 &&
+              !tensor_from_pb(vt, vn, pool.names[id], &tensors[n_tensors])) {
             n_tensors++;
           }
           free(vt);
@@ -465,7 +480,7 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
       continue;
     }
 
-    sc_node* node = &out_nodes[node_slot];
+    sc_node *node = &out_nodes[node_slot];
     memset(node, 0, sizeof(*node));
     node->n_in = in_count;
     node->ks = 0;
@@ -530,18 +545,18 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
         continue;
       }
       int an = 0;
-      pb_field* at = pb_slice(nd[k].data, nd[k].len, &an);
+      pb_field *at = pb_slice(nd[k].data, nd[k].len, &an);
       if (!at) {
         continue;
       }
-      char* aname = NULL;
+      char *aname = NULL;
       pb_text(at, an, 1, &aname);
       if (aname) {
         int64_t ints[8];
         int nints = 0;
         pb_ints(at, an, 8, ints, 8, &nints);
         if (nints == 0) {
-          const pb_field* scalar = pb_find(at, an, 3);
+          const pb_field *scalar = pb_find(at, an, 3);
           if (scalar && scalar->kind == 0) {
             ints[0] = scalar->i64;
             nints = 1;
@@ -562,7 +577,7 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
         } else if (strcmp(aname, "blocksize") == 0 && nints > 0) {
           node->block = (int)ints[0];
         } else if (strcmp(aname, "mode") == 0) {
-          char* mode = NULL;
+          char *mode = NULL;
           pb_text(at, an, 4, &mode);
           if (mode) {
             node->mode = strcmp(mode, "CRD") == 0 ? 1 : 0;
@@ -570,7 +585,7 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
             free(mode);
           }
         } else if (strcmp(aname, "coordinate_transformation_mode") == 0) {
-          char* coord = NULL;
+          char *coord = NULL;
           pb_text(at, an, 4, &coord);
           if (coord) {
             node->asymmetric = strcmp(coord, "asymmetric") == 0 ? 1 : 0;
@@ -578,8 +593,8 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
           }
         } else if (strcmp(aname, "alpha") == 0) {
           float alpha = 0.0f;
-          const pb_field* fv = pb_find(at, an, 2);
-          if (fv && fv->kind == 2 && fv->len >= 4) {
+          const pb_field *fv = pb_find(at, an, 2);
+          if (fv && (fv->kind == 2 || fv->kind == 3) && fv->len >= 4) {
             memcpy(&alpha, fv->data, 4);
             node->alpha = alpha;
           }
@@ -605,11 +620,11 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
       continue;
     }
     int vn = 0;
-    pb_field* v = pb_slice(g[i].data, g[i].len, &vn);
+    pb_field *v = pb_slice(g[i].data, g[i].len, &vn);
     if (!v) {
       continue;
     }
-    char* name = NULL;
+    char *name = NULL;
     if (!pb_text(v, vn, 1, &name) && name) {
       int id = big_find(&pool, name);
       if (id < 0) {
@@ -628,11 +643,11 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
       continue;
     }
     int vn = 0;
-    pb_field* v = pb_slice(g[i].data, g[i].len, &vn);
+    pb_field *v = pb_slice(g[i].data, g[i].len, &vn);
     if (!v) {
       continue;
     }
-    char* name = NULL;
+    char *name = NULL;
     if (!pb_text(v, vn, 1, &name) && name) {
       int id = big_find(&pool, name);
       if (id >= 0) {
@@ -646,7 +661,8 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
   model->n_nodes = produced;
   model->nodes = out_nodes;
   model->n_tensors = pool.n;
-  model->tensors = (sc_tensor*)calloc((size_t)(pool.n > 0 ? pool.n : 1), sizeof(sc_tensor));
+  model->tensors =
+      (sc_tensor *)calloc((size_t)(pool.n > 0 ? pool.n : 1), sizeof(sc_tensor));
   if (!model->tensors) {
     for (int i = 0; i < n_tensors; i++) {
       free(tensors[i].data);
@@ -692,7 +708,7 @@ int sc_model_load(const char* path, sc_model* model, char** err) {
   return 0;
 }
 
-void sc_model_free(sc_model* model) {
+void sc_model_free(sc_model *model) {
   if (!model) {
     return;
   }

@@ -17,9 +17,8 @@ void main() {
   if (c >= pc.n0 || y >= ho || x >= wo) {
     return;
   }
-  const uint oc = pc.kind == 1u
-      ? ((y % b) * b + (x % b)) * pc.n0 + c
-      : c * b * b + (y % b) * b + (x % b);
+  const uint oc = pc.kind == 1u ? c * b * b + (y % b) * b + (x % b)
+                                : ((y % b) * b + (x % b)) * pc.n0 + c;
   const uint src = oc * pc.n1 * pc.n2 + (y / b) * pc.n2 + (x / b);
   a[pc.out_off + c * ho * wo + y * wo + x] = a[pc.in_off + src];
 }
