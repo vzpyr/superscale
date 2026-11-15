@@ -2,6 +2,11 @@
 
 Minimal Android AI image upscaler
 
+<p align="center">
+  <img src="screenshots/screenshot1.png" width="250">
+  <img src="screenshots/screenshot2.png" width="250">
+</p>
+
 ## Features
 
 - Native C engine over FFI with CPU and GPU backends
